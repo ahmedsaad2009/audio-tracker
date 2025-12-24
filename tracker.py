@@ -1,84 +1,107 @@
 import streamlit as st
 import pandas as pd
-import os
+import gspread
+from google.oauth2.service_account import Credentials
 
-# 1. إعداد اسم الملف اللي هنحفظ فيه الداتا
-DATA_FILE = 'audio_mastery.csv'
-
-# 2. دالة لتحميل الداتا أو إنشاء ملف جديد لو مش موجود
-def load_data():
-    if os.path.exists(DATA_FILE):
-        return pd.read_csv(DATA_FILE)
-    else:
-        return pd.DataFrame(columns=["Audio Name", "Mastery Level", "Times Listened"])
-
-# 3. دالة لحفظ الداتا
-def save_data(df):
-    df.to_csv(DATA_FILE, index=False)
-
-# --- واجهة البرنامج ---
+# --- إعداد الصفحة ---
 st.set_page_config(page_title="Audio Mastery Tracker", page_icon="🎧")
-
 st.title("🎧 Audio Mastery Tracker")
 
-# تحميل الداتا الحالية
-df = load_data()
+# --- الاتصال بجوجل شيت ---
+SHEET_NAME = "audio_data"
 
-# اختيار الحالة: جديد ولا موجود؟
-st.subheader("What are you listening to?")
-option = st.radio("Choose Option:", ["Existing Audio", "New Audio"], horizontal=True)
+def get_data():
+    # بنستخدم الـ Secrets للاتصال
+    scope = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
+    credentials = Credentials.from_service_account_info(
+        st.secrets["gcp_service_account"], scopes=scope)
+    client = gspread.authorize(credentials)
+    
+    try:
+        sheet = client.open(SHEET_NAME).sheet1
+        data = sheet.get_all_records()
+        df = pd.DataFrame(data)
+        return sheet, df
+    except Exception as e:
+        st.error(f"Error connecting to Google Sheets: {e}")
+        return None, None
 
-if option == "New Audio":
-    # لو ملف جديد
-    new_name = st.text_input("Enter the name of the new audio:")
-    if st.button("Add Audio"):
-        if new_name and new_name not in df["Audio Name"].values:
-            # إضافة صف جديد
-            new_row = {"Audio Name": new_name, "Mastery Level": 0, "Times Listened": 0}
-            df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
-            save_data(df)
-            st.success(f"Added '{new_name}' successfully!")
-            st.rerun()
-        elif new_name in df["Audio Name"].values:
-            st.warning("This audio already exists!")
-        else:
-            st.error("Please enter a name.")
-
-elif option == "Existing Audio":
-    # لو ملف موجود
-    if not df.empty:
-        # قائمة منسدلة بالاوديو الموجود
-        audio_list = df["Audio Name"].tolist()
-        selected_audio = st.selectbox("Select Audio:", audio_list)
-        
-        # عرض المستوى الحالي
-        current_level = df.loc[df["Audio Name"] == selected_audio, "Mastery Level"].values[0]
-        st.info(f"Current Mastery Level: {current_level}/10")
-        
-        # زرار التسجيل
-        if st.button("✅ I Listened to this now"):
-            # تحديث الداتا
-            # بنزود 1 بس ميزيدش عن 10
-            new_level = min(current_level + 1, 10)
-            
-            df.loc[df["Audio Name"] == selected_audio, "Mastery Level"] = new_level
-            df.loc[df["Audio Name"] == selected_audio, "Times Listened"] += 1
-            save_data(df)
-            
-            st.success(f"Updated! New Level: {new_level}/10")
-            st.balloons() # تأثير بصري لطيف
-            
+# --- دالة تحويل الرقم لاسم المستوى ---
+def get_level_label(score):
+    if score >= 8:
+        return "⭐⭐⭐ Proficient"
+    elif score >= 5:
+        return "⭐⭐ Competent"
     else:
-        st.write("No audio records yet. Add a 'New Audio' first.")
+        return "⭐ Novice"
 
-st.markdown("---")
-# 4. عرض الجدول بالكامل عشان تشوف مستواك
-st.subheader("📊 Your Progress")
-if not df.empty:
-    # عرض الجدول بشكل تفاعلي
-    st.dataframe(
-        df.style.background_gradient(subset=['Mastery Level'], cmap='Greens', vmin=0, vmax=10),
-        use_container_width=True
-    )
-else:
-    st.write("Start adding audios to see your stats here.")
+# --- البرنامج ---
+sheet, df = get_data()
+
+if sheet is not None:
+    if df.empty:
+        df = pd.DataFrame(columns=["Audio Name", "Mastery Level", "Times Listened"])
+
+    # --- الجزء العلوي: الإدخال ---
+    st.subheader("What are you listening to?")
+    option = st.radio("Choose Option:", ["Existing Audio", "New Audio"], horizontal=True)
+
+    if option == "New Audio":
+        new_name = st.text_input("Enter the name of the new audio:")
+        if st.button("Add Audio"):
+            if new_name and (df.empty or new_name not in df["Audio Name"].values):
+                # إضافة صف جديد (الاسم، المستوى 0، عدد مرات الاستماع 0)
+                new_row = [new_name, 0, 0]
+                sheet.append_row(new_row)
+                st.success(f"Added '{new_name}' successfully!")
+                st.rerun()
+            elif not df.empty and new_name in df["Audio Name"].values:
+                st.warning("This audio already exists!")
+            else:
+                st.error("Please enter a name.")
+
+    elif option == "Existing Audio":
+        if not df.empty:
+            audio_list = df["Audio Name"].tolist()
+            selected_audio = st.selectbox("Select Audio:", audio_list)
+            
+            # استخراج البيانات الحالية
+            row_idx = df[df["Audio Name"] == selected_audio].index[0]
+            current_score = df.at[row_idx, "Mastery Level"]
+            current_times = df.at[row_idx, "Times Listened"]
+            
+            # عرض المستوى الحالي بشكل شيك
+            st.info(f"Current Level: {get_level_label(current_score)} ({current_score}/10)")
+            
+            if st.button("✅ I Listened to this now"):
+                new_score = min(current_score + 1, 10)
+                new_times = current_times + 1
+                
+                # تحديث جوجل شيت (رقم الصف الحقيقي = index + 2)
+                real_row_num = row_idx + 2 
+                sheet.update_cell(real_row_num, 2, new_score)      # العمود 2: Mastery Level
+                sheet.update_cell(real_row_num, 3, new_times)      # العمود 3: Times Listened
+                
+                st.success(f"Updated! New Level: {get_level_label(new_score)}")
+                st.balloons()
+                st.rerun()
+        else:
+            st.info("No audio records yet.")
+
+    st.markdown("---")
+    
+    # --- الجدول المعدل ---
+    st.subheader("📊 Your Progress")
+    if not df.empty:
+        # 1. بنعمل نسخة للعرض عشان منغيرش البيانات الأصلية
+        display_df = df.copy()
+        
+        # 2. بنحسب عمود جديد اسمه "Current Status" بناء على الأرقام
+        display_df["Current Status"] = display_df["Mastery Level"].apply(get_level_label)
+        
+        # 3. بنعيد ترتيب الأعمدة (الاسم الأول، ثم مرات الاستماع، ثم الحالة)
+        # لاحظ اننا شيلنا "Mastery Level" الرقمي وحطينا مكانه "Current Status" الكلام
+        display_df = display_df[["Audio Name", "Times Listened", "Current Status"]]
+        
+        # عرض الجدول
+        st.dataframe(display_df, use_container_width=True)
