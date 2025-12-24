@@ -11,7 +11,6 @@ st.title("🎧 Audio Mastery Tracker")
 SHEET_NAME = "audio_data"
 
 def get_data():
-    # بنستخدم الـ Secrets للاتصال
     scope = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
     credentials = Credentials.from_service_account_info(
         st.secrets["gcp_service_account"], scopes=scope)
@@ -50,7 +49,8 @@ if sheet is not None:
         new_name = st.text_input("Enter the name of the new audio:")
         if st.button("Add Audio"):
             if new_name and (df.empty or new_name not in df["Audio Name"].values):
-                # إضافة صف جديد (الاسم، المستوى 0، عدد مرات الاستماع 0)
+                # إضافة صف جديد
+                # هنا بنستخدم 0 عادي فمش محتاجة تحويل
                 new_row = [new_name, 0, 0]
                 sheet.append_row(new_row)
                 st.success(f"Added '{new_name}' successfully!")
@@ -70,17 +70,19 @@ if sheet is not None:
             current_score = df.at[row_idx, "Mastery Level"]
             current_times = df.at[row_idx, "Times Listened"]
             
-            # عرض المستوى الحالي بشكل شيك
             st.info(f"Current Level: {get_level_label(current_score)} ({current_score}/10)")
             
             if st.button("✅ I Listened to this now"):
+                # الحسابات
                 new_score = min(current_score + 1, 10)
                 new_times = current_times + 1
                 
-                # تحديث جوجل شيت (رقم الصف الحقيقي = index + 2)
+                # رقم الصف الحقيقي
                 real_row_num = row_idx + 2 
-                sheet.update_cell(real_row_num, 2, new_score)      # العمود 2: Mastery Level
-                sheet.update_cell(real_row_num, 3, new_times)      # العمود 3: Times Listened
+                
+                # --- التعديل هنا: تحويل القيم لـ int ---
+                sheet.update_cell(real_row_num, 2, int(new_score))
+                sheet.update_cell(real_row_num, 3, int(new_times))
                 
                 st.success(f"Updated! New Level: {get_level_label(new_score)}")
                 st.balloons()
@@ -93,15 +95,7 @@ if sheet is not None:
     # --- الجدول المعدل ---
     st.subheader("📊 Your Progress")
     if not df.empty:
-        # 1. بنعمل نسخة للعرض عشان منغيرش البيانات الأصلية
         display_df = df.copy()
-        
-        # 2. بنحسب عمود جديد اسمه "Current Status" بناء على الأرقام
         display_df["Current Status"] = display_df["Mastery Level"].apply(get_level_label)
-        
-        # 3. بنعيد ترتيب الأعمدة (الاسم الأول، ثم مرات الاستماع، ثم الحالة)
-        # لاحظ اننا شيلنا "Mastery Level" الرقمي وحطينا مكانه "Current Status" الكلام
         display_df = display_df[["Audio Name", "Times Listened", "Current Status"]]
-        
-        # عرض الجدول
         st.dataframe(display_df, use_container_width=True)
